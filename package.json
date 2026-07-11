@@ -1,0 +1,8 @@
+{
+  "name": "loica-extension-translation",
+  "version": "2.0.0",
+  "description": "Translate the selected passage in a Loica document into another language via a local/remote LLM (Ollama), streamed inline. Read-only — never edits the original.",
+  "type": "module",
+  "main": "index.ts",
+  "engines": { "loica": "1" }
+}
