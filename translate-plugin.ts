@@ -393,7 +393,7 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
     padding: "6px 11px", borderTop: "1px solid var(--border, #ccc)",
     fontSize: "11px", opacity: "0.55",
   } as CSSStyleDeclaration);
-  footer.textContent = "Read-only — the original is unchanged.";
+  footer.textContent = "Machine translation — review before use. The original is unchanged.";
 
   pop.append(header, body, footer);
   document.body.appendChild(pop);
@@ -458,12 +458,14 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
         if (!currentText) body.innerHTML = `<span style="opacity:.6">(empty translation)</span>`;
         copyBtn.disabled = !currentText;
         copyBtn.style.opacity = currentText ? "1" : "0.5";
-        footer.textContent = `Read-only — the original is unchanged${model ? ` · ${model}` : ""}.`;
+        footer.textContent =
+          `Machine translation — review before use. The original is unchanged` +
+          `${model ? ` · ${model}` : ""}.`;
       })
       .catch((err: unknown) => {
         if (mySeq !== seq) return;
         stopTicker();
-        footer.textContent = "Read-only — the original is unchanged.";
+        footer.textContent = "Machine translation — review before use. The original is unchanged.";
         setDecos(view, sourceDecos(view.state.doc, from, to, false));
         body.innerHTML = "";
         const p = document.createElement("div");
