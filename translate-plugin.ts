@@ -40,6 +40,9 @@ const ALL_LANGS = [
 ] as const;
 
 const MIN_CHARS = 1;
+// Keep in sync with MAX_CHARS in translate.ts — checked here too so an oversized
+// selection fails instantly with a number instead of after a round trip.
+const MAX_CHARS = 3000;
 
 // Cache translations by `${lang}\n${text}` so re-translating an unchanged
 // passage into the same language is instant. Capped, module-level.
@@ -140,6 +143,14 @@ function setDecos(view: EditorView, decos: DecorationSet) {
   } catch {
     /* ignore */
   }
+}
+
+// Local models are slow enough that silence reads as "it broke". Measured
+// throughput for the default 12B on Apple silicon is ~48 source chars/second
+// end-to-end, plus a couple of seconds of warm-up before the first token. A
+// bigger or smaller model shifts this, so it is a hint, never a promise.
+function etaSeconds(chars: number): number {
+  return Math.max(5, Math.round((chars / 48 + 2) / 5) * 5);
 }
 
 function sourceDecos(doc: PMNode, from: number, to: number, pending: boolean): DecorationSet {
@@ -390,6 +401,12 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
 
   let currentText = "";
   let seq = 0; // guards against a stale in-flight request updating the body
+  let ticker: ReturnType<typeof setInterval> | undefined;
+
+  function stopTicker() {
+    if (ticker !== undefined) clearInterval(ticker);
+    ticker = undefined;
+  }
 
   function run(target: string) {
     targetText.textContent = target;
@@ -397,8 +414,22 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
     copyBtn.disabled = true;
     copyBtn.style.opacity = "0.5";
     currentText = "";
-    body.innerHTML = `<span class="loica-tr-spinner"></span> <span style="opacity:.6">Translating to ${target}…</span>`;
+    const eta = etaSeconds(text.length);
+    body.innerHTML =
+      `<span class="loica-tr-spinner"></span> <span style="opacity:.6">Translating to ${target}…` +
+      `</span> <span style="opacity:.4">~${eta}s</span>`;
     const mySeq = ++seq;
+
+    // Once tokens start landing the streaming text is its own progress bar, but
+    // a long passage still runs for a minute — keep elapsed/estimate in the
+    // footer so the wait stays legible instead of feeling hung.
+    const startedAt = Date.now();
+    stopTicker();
+    ticker = setInterval(() => {
+      if (mySeq !== seq) return stopTicker();
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      footer.textContent = `Translating… ${elapsed}s of ~${eta}s`;
+    }, 1000);
 
     streamTranslate(docId, text, source, target, (full) => {
       if (mySeq !== seq) return;
@@ -407,6 +438,7 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
     })
       .then(({ model }) => {
         if (mySeq !== seq) return;
+        stopTicker();
         setDecos(view, sourceDecos(view.state.doc, from, to, false));
         if (!currentText) body.innerHTML = `<span style="opacity:.6">(empty translation)</span>`;
         copyBtn.disabled = !currentText;
@@ -415,6 +447,8 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
       })
       .catch((err: unknown) => {
         if (mySeq !== seq) return;
+        stopTicker();
+        footer.textContent = "Read-only — the original is unchanged.";
         setDecos(view, sourceDecos(view.state.doc, from, to, false));
         body.innerHTML = "";
         const p = document.createElement("div");
@@ -439,6 +473,7 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
     el: pop,
     destroy: () => {
       seq++; // invalidate any in-flight request
+      stopTicker();
       pop.remove();
       setDecos(view, DecorationSet.empty);
       document.removeEventListener("mousedown", onDocMouseDown, true);
@@ -490,6 +525,14 @@ export function runTranslate(view: EditorView, opts: TranslatePluginOptions): vo
   const text = selectionToText(view.state.doc, s.from, s.to);
   if (!text.trim()) {
     flash(view, "Select some text first");
+    return;
+  }
+  if (text.length > MAX_CHARS) {
+    flash(
+      view,
+      `Selection is ${text.length.toLocaleString()} characters — translate up to ` +
+        `${MAX_CHARS.toLocaleString()} at a time (about a minute).`,
+    );
     return;
   }
   openTranslator(view, opts.docId, s.from, s.to);

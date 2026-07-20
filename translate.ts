@@ -71,6 +71,12 @@ function assertSafeUrl(base: string): void {
   );
 }
 
+// Ceiling on a single selection. Not a model limit — a patience limit: the
+// default 12B model sustains ~48 source characters/second on Apple silicon, so
+// 3,000 chars is a little over a minute. The old 8,000 took ~3 minutes, which
+// technically worked but nobody waits that long staring at a popover.
+const MAX_CHARS = 3000;
+
 function systemPrompt(targetLanguage: string, sourceLanguage?: string): string {
   const from = sourceLanguage ? `from ${sourceLanguage} ` : "";
   return (
@@ -95,9 +101,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
   if (!text || !text.trim()) {
     return Response.json({ error: "No text to translate." }, { status: 400 });
   }
-  if (text.length > 8000) {
+  if (text.length > MAX_CHARS) {
     return Response.json(
-      { error: "Selection too long — translate a paragraph or two at a time." },
+      {
+        error:
+          `Selection is ${text.length.toLocaleString()} characters — the limit is ` +
+          `${MAX_CHARS.toLocaleString()}. Translate a few paragraphs at a time.`,
+      },
       { status: 413 },
     );
   }

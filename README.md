@@ -72,6 +72,28 @@ running Ollama with the model pulled: `ollama pull gemma3:12b`.
 - **Streaming** — the translation appears as it's generated, not after a full
   wait.
 
+### Speed, honestly
+
+Measured on an M4 (32 GB) with `gemma3:12b` warm — a cold model adds ~5s:
+
+| Selection | First token | Complete |
+|-----------|-------------|----------|
+| ~65 words | 1.5s | 7s |
+| ~200 words | 2.6s | 23s |
+| ~520 words | 6.7s | 71s |
+
+Roughly **48 source characters per second**. Selections are capped at 3,000
+characters (`MAX_CHARS`, ~a minute) — the cap is patience, not a model limit.
+The popover shows an estimate before the first token and an elapsed/estimate
+counter while streaming, so a long passage doesn't read as a hang.
+
+A smaller model trades accuracy for speed: `translategemma:4b` runs ~3× faster
+(0.6s to first token, 8.7s for 200 words) but drops terminology — in testing it
+rendered "Global Majority" as "a nivel mundial" and "civic space" as "espacio
+público", and it echoed prompt instructions into its output. It is not
+recommended as the default; `gemma3:12b` was the only model tested that
+produced no serious errors.
+
 ## Topology — running the LLM on a separate host
 
 The LLM is heavy but on-demand, so run it on a **GPU host** (e.g. an M4 Mac),
