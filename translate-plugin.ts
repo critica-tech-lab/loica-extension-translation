@@ -184,6 +184,16 @@ function injectStyles() {
 // ── streaming fetch ──────────────────────────────────────────────────────────
 
 /**
+ * The share token for a publicly-viewed document, read off `/s/:token`. Members
+ * viewing a document normally are on a different path and get `null` — they are
+ * authorised by session instead.
+ */
+function shareTokenFromLocation(): string | null {
+  const m = window.location.pathname.match(/^\/s\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
  * Translate `text` into `targetLang`, streaming deltas to `onText(full)`.
  * Returns the final text + model tag. Cache hits resolve instantly.
  */
@@ -204,7 +214,12 @@ async function streamTranslate(
   const res = await fetch(`/api/translate/${docId}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, targetLang, sourceLang: sourceLang || undefined }),
+    body: JSON.stringify({
+      text,
+      targetLang,
+      sourceLang: sourceLang || undefined,
+      shareToken: shareTokenFromLocation() || undefined,
+    }),
   });
 
   const ct = res.headers.get("content-type") || "";

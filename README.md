@@ -94,6 +94,34 @@ público", and it echoed prompt instructions into its output. It is not
 recommended as the default; `gemma3:12b` was the only model tested that
 produced no serious errors.
 
+## Access control
+
+`POST /api/translate/:id` fronts an Ollama instance that has **no
+authentication of its own**, so this route is the only thing between a caller
+and your GPU. It grants access to exactly three cases:
+
+1. A session user who is a member of the document's workspace.
+2. A session user with folder-share access.
+3. A caller who **presents a valid share token for that same document** — the
+   `shareToken` body field, resolved through `getDocumentByToken`, which also
+   enforces `share_expires_at`. Password-protected shares additionally require
+   the `__share_pwd_<token>` cookie that `routes/s.$token.tsx` sets.
+
+Everything else gets a `404`. On top of that, `targetLang` and `sourceLang` are
+matched against an allowlist (they are interpolated into the *system* prompt, so
+free-form values would let a caller rewrite the model's instructions), and each
+credential gets 20 translations per 5 minutes.
+
+> **If you run a fork of this from before this was fixed, update.** The earlier
+> `authorizeDoc` treated "the document has a share token" as "no auth needed"
+> without the caller ever proving they held it — knowing a document id was
+> enough to reach the LLM anonymously with an arbitrary prompt, and expired or
+> password-protected links kept working. The same pattern exists in the
+> AI-proofreader extension's `proofread.ts`; fix both.
+
+The rate limiter is in-memory and therefore per-process — a multi-instance
+deployment needs a shared store to be effective.
+
 ## Topology — running the LLM on a separate host
 
 The LLM is heavy but on-demand, so run it on a **GPU host** (e.g. an M4 Mac),
