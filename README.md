@@ -33,7 +33,7 @@ source is also passed to the LLM to sharpen the prompt.
 | File | Role |
 |------|------|
 | `index.ts` / `index.server.ts` | Registry entries (`export default`). |
-| `routes.ts` + `route-shim.ts` | `/api/translate/:id` route (shim under `app/routes/`). |
+| `routes.ts` | `export default` the `/api/translate/:id` route, pointing straight at `translate.ts` (no shim). |
 | `translate-plugin.ts` | Source highlight, inline popover, language picker, streaming, cache. |
 | `translate.ts` | Route `action`: auth + streams from Ollama, returns `text/plain` deltas + `X-Model`. |
 
@@ -141,20 +141,28 @@ README for the tunnel setup.
 ## Install
 
 Requires a loica build with the generic seams (auto-discovery + `editorPlugins`
-+ `selectionMenuItems` + out-of-root `~/` alias). No loica core edits:
++ `selectionMenuItems`). No loica core edits.
+
+Installed as a git submodule, so the extension lives physically under `app/` and
+its `routes.ts` points straight at `translate.ts` — no symlink, no route shim:
 
 ```bash
 cd /path/to/loica
-ln -s /path/to/loica-extension-translation app/extensions/translation
-cp app/extensions/translation/route-shim.ts app/routes/api.translate.\$id.ts
-printf '/app/extensions/translation\n/app/routes/api.translate.\$id.ts\n' >> .git/info/exclude
+git submodule add git@github.com:critica-tech-lab/loica-extension-translation.git \
+  app/extensions/translation
 bun run build && restart
 # then enable "translation" in the Extensions admin panel, with OLLAMA_URL set.
 ```
 
-The host never tracks this extension: the symlink and shim are ignored via
-`.git/info/exclude` (local, not the versioned `.gitignore`), keeping loica core
-fully agnostic.
+Anyone cloning loica afterward gets it with `git submodule update --init
+app/extensions/translation`. The pinned commit is tracked in loica, so the
+installed version travels with the repo.
+
+> Earlier installs symlinked this repo into `app/extensions/` and copied a shim
+> into `app/routes/`, kept out of git via `.git/info/exclude`. That worked but
+> left no versioned record of what was installed, and the out-of-root symlink
+> broke React Router's server/client split unless the shim was present. The
+> submodule layout removes both problems.
 
 ## Upgrading from v1
 
