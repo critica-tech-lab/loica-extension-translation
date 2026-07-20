@@ -119,8 +119,14 @@ credential gets 20 translations per 5 minutes.
 > password-protected links kept working. The same pattern exists in the
 > AI-proofreader extension's `proofread.ts`; fix both.
 
-The rate limiter is in-memory and therefore per-process — a multi-instance
-deployment needs a shared store to be effective.
+**The rate limiter is in-memory, so it counts per process.** On a single-process
+deployment (pm2 `fork` mode, a lone container) the limit holds exactly. Run N
+instances — pm2 `cluster` mode, a replicated container, several machines behind
+a load balancer — and each keeps its own counter, so the effective limit becomes
+20 × N per credential. This is deliberate: the alternative is a shared store,
+and nothing else in this extension touches the host database, which is what
+keeps loica core agnostic of it. If you scale out and the limit matters, move
+the counter to a store both processes can see before you do.
 
 ## Topology — running the LLM on a separate host
 
