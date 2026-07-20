@@ -506,18 +506,31 @@ function openTranslator(view: EditorView, docId: string, from: number, to: numbe
 
 function flash(view: EditorView, msg: string) {
   try {
+    // Default: centre-top, where a transient notice is expected. Anchor to the
+    // selection only when its end is genuinely on screen — the end of a long
+    // selection is normally scrolled past the fold, and following it there puts
+    // the notice at the bottom edge, far from where the user is looking.
     let left = window.innerWidth / 2, top = 80;
     try {
       const c = view.coordsAtPos(view.state.selection.to);
-      left = c.left; top = c.bottom + 8;
+      if (c.bottom >= 0 && c.bottom <= window.innerHeight - 48) {
+        left = c.left; top = c.bottom + 8;
+      }
     } catch {
       /* centre-top */
     }
     const t = document.createElement("div");
     t.textContent = msg;
+    // `coordsAtPos` returns viewport coordinates, and the end of a long
+    // selection is usually scrolled past the bottom of the window — so clamp
+    // into view. Unclamped, the "selection is too long" warning rendered below
+    // the fold and the action looked like it did nothing at all.
     Object.assign(t.style, {
-      position: "fixed", left: `${Math.min(left, window.innerWidth - 200)}px`, top: `${top}px`,
-      zIndex: "1600", padding: "4px 10px", fontSize: "12px",
+      position: "fixed",
+      left: `${Math.min(Math.max(left, 8), Math.max(8, window.innerWidth - 220))}px`,
+      top: `${Math.min(Math.max(top, 8), Math.max(8, window.innerHeight - 48))}px`,
+      maxWidth: "min(320px, calc(100vw - 24px))",
+      zIndex: "1600", padding: "4px 10px", fontSize: "12px", lineHeight: "1.35",
       background: "var(--fg, #111)", color: "var(--bg, #fff)",
       borderRadius: "8px", boxShadow: "0 2px 8px rgba(0,0,0,0.2)", pointerEvents: "none",
     } as CSSStyleDeclaration);
