@@ -26,6 +26,8 @@
 import type { ActionFunctionArgs } from "react-router";
 import { getSessionUser } from "~/lib/auth.server";
 import { getDocument, getDocumentByToken } from "~/lib/document.server";
+import { db } from "~/lib/db.server";
+import { verifySharePasswordCookie } from "~/lib/share-password.server";
 import { getMembership } from "~/lib/workspace.server";
 import { hasSharedAccess } from "~/lib/sharing.server";
 
@@ -73,7 +75,12 @@ async function authorizeDoc(
     if (viaToken && viaToken.document.id === doc.id) {
       const passwordOk =
         !viaToken.hasPassword ||
-        parseCookies(request.headers.get("Cookie") ?? "")[`__share_pwd_${token}`] === "1";
+        verifySharePasswordCookie(
+          db,
+          token,
+          viaToken.document.share_password_hash ?? "",
+          parseCookies(request.headers.get("Cookie") ?? "")[`__share_pwd_${token}`],
+        );
       if (passwordOk) return { doc, rateKey: `t:${token}` };
     }
   }
