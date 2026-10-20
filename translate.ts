@@ -22,14 +22,26 @@
  *   OLLAMA_URL             base url   (default http://localhost:11434)
  *   OLLAMA_TRANSLATE_MODEL model tag  (default gemma3:12b)
  *   OLLAMA_KEEP_ALIVE      resident   (default 30m)
+ *   OLLAMA_TIMEOUT_MS      give up after this long, stream included (default 120000)
+ *   OLLAMA_MAX_CONCURRENT  Loica requests sent to Ollama at once (default 2)
+ *   OLLAMA_MAX_QUEUE       Loica requests allowed to wait; more get 503 (default 4)
  */
 import type { ActionFunctionArgs } from "react-router";
 import { getSessionUser } from "~/lib/auth.server";
 import { getDocument, getDocumentByToken } from "~/lib/document.server";
 import { db } from "~/lib/db.server";
 import { verifySharePasswordCookie } from "~/lib/share-password.server";
-import { getMembership } from "~/lib/workspace.server";
-import { hasSharedAccess } from "~/lib/sharing.server";
+import { getUserDocAccess } from "~/lib/doc-access.server";
+import { createGate, GateBusyError } from "./gate";
+
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+// Caps Loica's own load on the LLM server: extra requests fail fast with a
+// "busy" error instead of queueing behind other Ollama clients with no limit.
+const gate = createGate({
+  maxActive: Number(process.env.OLLAMA_MAX_CONCURRENT) || 2,
+  maxQueued: Number(process.env.OLLAMA_MAX_QUEUE) || 4,
+});
 
 function parseCookies(header: string): Record<string, string> {
   return Object.fromEntries(
@@ -43,8 +55,9 @@ function parseCookies(header: string): Record<string, string> {
 }
 
 /**
- * Grant access only to a workspace member, a folder-share recipient, or a caller
- * who actually presents a valid share token for *this* document.
+ * Grant access only to a workspace member, a folder- or document-share
+ * recipient, or a caller who actually presents a valid share token for *this*
+ * document.
  *
  * The earlier version treated "the document has a share token" as "no auth
  * needed", without the caller ever proving they held it — so knowing a document
@@ -62,9 +75,7 @@ async function authorizeDoc(
 
   const user = getSessionUser(request);
   if (user) {
-    const role = getMembership(doc.workspace_id, user.id, user.is_admin);
-    const shared = doc.folder_id ? hasSharedAccess(doc.folder_id, user.id) : false;
-    if (role || shared) return { doc, rateKey: `u:${user.id}` };
+    if (getUserDocAccess(doc, user)) return { doc, rateKey: `u:${user.id}` };
   }
 
   const token = shareToken?.trim();
@@ -224,10 +235,24 @@ export async function action({ request, params }: ActionFunctionArgs) {
   const estTokens = Math.ceil(text.length / 4);
   const numCtx = Math.min(8192, Math.max(2048, estTokens * 3 + 500));
 
+  let release: () => void;
+  try {
+    release = await gate.acquire();
+  } catch (err) {
+    if (err instanceof GateBusyError) {
+      return Response.json({ error: err.message }, { status: 503 });
+    }
+    throw err;
+  }
+
+  // Ollama queues with no timeout, so a stuck generation would hold this slot
+  // forever. The signal also covers reading the stream below.
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
   let upstream: Response;
   try {
     upstream = await fetch(`${base}/api/chat`, {
       method: "POST",
+      signal: AbortSignal.timeout(timeoutMs),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model,
@@ -242,6 +267,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
       }),
     });
   } catch (err) {
+    release();
+    if (err instanceof Error && err.name === "TimeoutError") {
+      return Response.json(
+        { error: "The AI server took too long to answer. It may be busy; try again in a minute." },
+        { status: 504 },
+      );
+    }
     return Response.json(
       {
         error: `Could not reach the LLM at ${base}. Is Ollama running? (${
@@ -254,6 +286,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
   if (!upstream.ok || !upstream.body) {
     const detail = await upstream.text().catch(() => "");
+    release();
     return Response.json(
       { error: `LLM returned ${upstream.status}: ${detail.slice(0, 300)}` },
       { status: 502 },
@@ -263,9 +296,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
   // Transform Ollama's NDJSON stream (`{ message: { content }, done }` per line)
   // into a plain-text stream of just the content deltas, which the client
   // appends live into the popover.
+  const reader = upstream.body.getReader();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const reader = upstream.body!.getReader();
       const decoder = new TextDecoder();
       const encoder = new TextEncoder();
       let buf = "";
@@ -288,11 +321,24 @@ export async function action({ request, params }: ActionFunctionArgs) {
             }
           }
         }
-      } catch {
-        /* upstream dropped — end the stream with whatever arrived */
-      } finally {
         controller.close();
+      } catch (err) {
+        // Upstream dropped or timed out. Error the stream rather than closing
+        // it, so the client shows a failure instead of caching a truncated
+        // translation as complete.
+        try {
+          controller.error(err);
+        } catch {
+          /* client already cancelled */
+        }
+      } finally {
+        release();
       }
+    },
+    cancel() {
+      // The user closed the popover: stop generating and free the slot.
+      reader.cancel().catch(() => {});
+      release();
     },
   });
 

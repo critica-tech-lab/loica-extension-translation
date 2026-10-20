@@ -36,6 +36,7 @@ source is also passed to the LLM to sharpen the prompt.
 | `routes.ts` | `export default` the `/api/translate/:id` route, pointing straight at `translate.ts` (no shim). |
 | `translate-plugin.ts` | Source highlight, inline popover, language picker, streaming, cache. |
 | `translate.ts` | Route `action`: auth + streams from Ollama, returns `text/plain` deltas + `X-Model`. |
+| `gate.ts` | Caps concurrent and queued requests to Ollama; a slot is held until the stream ends. |
 
 ### How it plugs into loica (zero core edits)
 
@@ -58,6 +59,14 @@ Uses only generic extension seams — core names no extension:
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama base URL |
 | `OLLAMA_TRANSLATE_MODEL` | `gemma3:12b` | model tag (any pulled model) |
 | `OLLAMA_KEEP_ALIVE` | `30m` | how long Ollama keeps the model resident |
+| `OLLAMA_TIMEOUT_MS` | `120000` | give up on a request after this long, streaming included (Ollama queues with no timeout) |
+| `OLLAMA_MAX_CONCURRENT` | `2` | Loica translations sent to Ollama at once |
+| `OLLAMA_MAX_QUEUE` | `4` | translations allowed to wait; more fail at once with 503 "AI server is busy" |
+
+A translation holds its slot until its stream ends, or until the user closes the
+popover. The same variables configure the AI proofreader, but each extension
+keeps its own count, so with both enabled Loica can have up to twice
+`OLLAMA_MAX_CONCURRENT` requests on Ollama.
 
 `gemma3:12b` and `qwen2.5:7b` both do multilingual translation well. Requires a
 running Ollama with the model pulled: `ollama pull gemma3:12b`.
@@ -100,8 +109,8 @@ produced no serious errors.
 authentication of its own**, so this route is the only thing between a caller
 and your GPU. It grants access to exactly three cases:
 
-1. A session user who is a member of the document's workspace.
-2. A session user with folder-share access.
+1. A session user who is a member of the document's workspace (or a site admin).
+2. A session user the document, or a folder above it, is shared with.
 3. A caller who **presents a valid share token for that same document** — the
    `shareToken` body field, resolved through `getDocumentByToken`, which also
    enforces `share_expires_at`. Password-protected shares additionally require
@@ -116,8 +125,7 @@ credential gets 20 translations per 5 minutes.
 > `authorizeDoc` treated "the document has a share token" as "no auth needed"
 > without the caller ever proving they held it — knowing a document id was
 > enough to reach the LLM anonymously with an arbitrary prompt, and expired or
-> password-protected links kept working. The same pattern exists in the
-> AI-proofreader extension's `proofread.ts`; fix both.
+> password-protected links kept working.
 
 **The rate limiter is in-memory, so it counts per process.** On a single-process
 deployment (pm2 `fork` mode, a lone container) the limit holds exactly. Run N
@@ -140,8 +148,9 @@ README for the tunnel setup.
 
 ## Install
 
-Requires a loica build with the generic seams (auto-discovery + `editorPlugins`
-+ `selectionMenuItems`). No loica core edits.
+Requires a loica build with the generic seams (auto-discovery, `editorPlugins`,
+`selectionMenuItems`) and `getUserDocAccess` from `~/lib/doc-access.server`
+(loica #136 or later). No loica core edits.
 
 Installed as a git submodule, so the extension lives physically under `app/` and
 its `routes.ts` points straight at `translate.ts` — no symlink, no route shim:
